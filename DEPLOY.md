@@ -1,11 +1,11 @@
-# AWS EC2 Deployment Guide
+# AWS EC2 Production Deployment Guide
 
-This guide walks you through deploying the **AI PPT & Lesson Plan Generator** on an AWS EC2 instance (Ubuntu 22.04 LTS).
+This guide walks you through deploying the **AI PPT & Lesson Plan Generator** on an AWS EC2 instance (Ubuntu 22.04 LTS) from scratch.
 
 ---
 
-## 1. Configure AWS EC2 Instance Security Group
-Ensure the security group associated with your EC2 instance allows incoming traffic on the following ports:
+## 1. Configure AWS EC2 Security Group
+Ensure the security group associated with your EC2 instance allows incoming traffic on these ports:
 - **Port 22** (SSH) — For remote access
 - **Port 80** (HTTP) — For web access
 - **Port 443** (HTTPS) — For secure SSL access
@@ -34,9 +34,37 @@ sudo npm install -g pm2
 
 ---
 
-## 3. Clone and Setup Directory
+## 3. Install and Configure MongoDB (Optional)
+If you are NOT using MongoDB Atlas (cloud database) and want to run MongoDB locally on your EC2 instance:
 
-Create a directory under `/var/www/` for deployment and set permissions:
+### Install MongoDB Community Edition
+```bash
+# Import the public GPG key for the latest stable MongoDB
+sudo apt-get install gnupg curl
+curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | \
+   sudo gpg --o /usr/share/keyrings/mongodb-server-7.0.gpg \
+   --dearmor --yes
+
+# Create a list file for MongoDB
+echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+
+# Reload local package database and install MongoDB
+sudo apt-get update
+sudo apt-get install -y mongodb-org
+```
+
+### Start & Enable MongoDB Service
+```bash
+sudo systemctl start mongod
+sudo systemctl enable mongod
+```
+*Note: Your local connection string will be `mongodb://127.0.0.1:27017/ai_ppt_generator`.*
+
+---
+
+## 4. Clone and Setup Directory
+
+Create a folder under `/var/www/` for the project and set permissions:
 ```bash
 sudo mkdir -p /var/www/ppt-generator
 sudo chown -R $USER:$USER /var/www/ppt-generator
@@ -50,73 +78,68 @@ cd /var/www/ppt-generator
 
 ---
 
-## 4. Install Dependencies & Build Frontend
+## 5. Environment Configuration & Setup
 
-### Backend Setup
-Navigate to the backend, install dependencies, and create the `.env` file:
+### Create Backend `.env` File
 ```bash
 cd /var/www/ppt-generator/backend
-npm install
 nano .env
 ```
-Copy and paste your environment variables into the `.env` file:
+Copy and paste your production environment variables:
 ```env
 PORT=5001
-MONGODB_URI=your_mongodb_connection_string
-JWT_SECRET=your_jwt_secret
+MONGODB_URI=mongodb://127.0.0.1:27017/ai_ppt_generator   # Use local MongoDB or MongoDB Atlas URL
+JWT_SECRET=your_production_secret_key_here
 OPENAI_API_KEY=your_openai_api_key
 GEMINI_API_KEY=your_gemini_api_key
 NODE_ENV=production
 MOCK_AI=false
 ```
 
-### Frontend Setup
-Navigate to the frontend, install dependencies, and build:
-```bash
-cd /var/www/ppt-generator/frontend
-npm install
-npm run build
-```
-This generates optimized static files inside `/var/www/ppt-generator/frontend/dist`.
-
 ---
 
-## 5. Process Management (PM2)
+## 6. Run Initial Build & Start PM2
 
-Start the Node.js backend using PM2 from the project root directory:
+Make the deployment automation script executable:
 ```bash
 cd /var/www/ppt-generator
-pm2 start ecosystem.config.js
+chmod +x deploy.sh
 ```
 
-### Setup PM2 to Start on Server Boot
+Run the automated script to install all dependencies, build the React frontend, and launch the Express backend under PM2 management:
+```bash
+./deploy.sh
+```
+
+### Setup PM2 Server Startup Hook
+Ensure the backend process auto-starts if the EC2 instance reboots:
 ```bash
 pm2 startup
-# Run the command outputted by the screen
+# Run the command outputted on the terminal screen
 pm2 save
 ```
 
 ---
 
-## 6. Configure Nginx Reverse Proxy
+## 7. Configure Nginx Reverse Proxy
 
-Copy the `nginx.conf` template into the Nginx configuration folder:
+Copy the pre-configured Nginx config template to Nginx's sites folder:
 ```bash
 sudo cp /var/www/ppt-generator/nginx.conf /etc/nginx/sites-available/ppt-generator
 sudo ln -s /etc/nginx/sites-available/ppt-generator /etc/nginx/sites-enabled/
 ```
 
-Remove the default Nginx configurations:
+Remove Nginx's default site:
 ```bash
 sudo rm /etc/nginx/sites-enabled/default
 ```
 
-Edit the file to replace `your_domain_or_ec2_public_ip` with your actual domain or EC2 Public IP:
+Edit the site config to replace `your_domain_or_ec2_public_ip` with your actual domain name or EC2 Public IP:
 ```bash
 sudo nano /etc/nginx/sites-enabled/ppt-generator
 ```
 
-Verify and restart Nginx:
+Verify the configuration and restart Nginx:
 ```bash
 sudo nginx -t
 sudo systemctl restart nginx
@@ -124,13 +147,37 @@ sudo systemctl restart nginx
 
 ---
 
-## 7. Enable SSL with Let's Encrypt (Certbot)
+## 8. Enable SSL with Let's Encrypt (Certbot)
+If you have pointed a custom domain name (e.g. `yourdomain.com`) to your EC2 public IP:
 
-If you have mapped a domain name (e.g. `yourdomain.com`) to your EC2 IP:
 ```bash
 sudo apt install snapd
 sudo snap install --classic certbot
 sudo ln -s /snap/bin/certbot /usr/bin/certbot
 sudo certbot --nginx -d yourdomain.com
 ```
-Follow the prompts, and Certbot will automatically install SSL and redirect HTTP traffic to HTTPS securely.
+Follow the interactive prompts to enable SSL and enforce HTTPS redirection.
+
+---
+
+## 9. Monitoring & Logs (Useful Commands)
+
+- **View Live Logs**: `pm2 logs`
+- **Monitor Processes (CPU/RAM)**: `pm2 monit`
+- **Restart Application**: `pm2 reload ecosystem.config.js`
+- **List Running Apps**: `pm2 list`
+
+To automatically rotate PM2 logs (prevent logs from filling disk space):
+```bash
+pm2 install pm2-logrotate
+```
+
+---
+
+## 10. Deploying Future Updates
+Whenever you push new code changes to your GitHub main branch, simply SSH into your EC2 server and run:
+```bash
+cd /var/www/ppt-generator
+./deploy.sh
+```
+The script will fetch the updates, compile the frontend assets, and cleanly reload the backend backend without any downtime.
