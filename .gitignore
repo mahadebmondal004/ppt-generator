@@ -1,0 +1,27 @@
+# Node dependencies
+node_modules/
+**/node_modules/
+
+# Local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+**/.env*
+
+# Build outputs
+dist/
+build/
+.vite/
+**/dist/
+**/build/
+**/.vite/
+
+# Backend generated uploads
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db
